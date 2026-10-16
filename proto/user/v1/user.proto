@@ -1,0 +1,30 @@
+// Internal contract between auth-service (client) and user-service (server).
+// Never exposed to the app: the app only talks HTTP (backend/api/).
+// Regenerate with `buf generate` from the SDK root. Check with `buf lint` and `buf breaking`.
+syntax = "proto3";
+
+package user.v1;
+
+service UserService {
+  rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
+  rpc GetCredentialsByEmail(GetCredentialsByEmailRequest) returns (GetCredentialsByEmailResponse);
+}
+
+message CreateUserRequest {
+  string email = 1;
+  string password_hash = 2;
+}
+
+message CreateUserResponse {
+  // UUID.
+  string user_id = 1;
+}
+
+message GetCredentialsByEmailRequest {
+  string email = 1;
+}
+
+message GetCredentialsByEmailResponse {
+  string user_id = 1;
+  string password_hash = 2;
+}
