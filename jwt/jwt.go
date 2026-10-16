@@ -1,72 +1,58 @@
+// Package jwt issues and parses access tokens.
+// Access tokens carry only the user ID (sub) and expiry: no email or name, since anyone holding a token can read it.
 package jwt
 
 import (
-	"context"
+	"errors"
 	"fmt"
-	"net/http"
-	"sdk/model"
-	"sdk/response"
-	"strings"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
 
-type JWTDataClaims struct {
-	Email string
-	ID uint
-	Name string
-	Exp int64
+// Issuer is set on every access token and checked on parse.
+const Issuer = "jsb-auth"
+
+// ErrInvalidToken covers every reason a token is rejected (bad signature, expired, malformed).
+var ErrInvalidToken = errors.New("invalid access token")
+
+// Claims are the claims of an access token. UserID is in RegisteredClaims.Subject.
+type Claims struct {
+	jwt.RegisteredClaims
 }
 
-type contextKey string
-const UserClaimsKey contextKey = "user_claims"
-
-func JWTMiddleware(secretKey string) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-
-			authHeader := r.Header.Get("Authorization")
-			if authHeader == "" {
-				response.WriteJSON(w, model.ErrorResponse{Message: model.ErrorMissingToken.Error()}, http.StatusUnauthorized)
-				return
-			}
-
-			tokenString := authHeader
-			if strings.HasPrefix(authHeader, "Bearer ") {
-				tokenString = strings.TrimPrefix(authHeader, "Bearer ")
-			}
-
-			token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-				if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-					return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-				}
-				return []byte(secretKey), nil
-			})
-
-			if err != nil || !token.Valid {
-				response.WriteJSON(w, model.ErrorResponse{Message: model.ErrorInvalidToken.Error()}, http.StatusUnauthorized)
-				return
-			}
-
-			claims, ok := token.Claims.(jwt.MapClaims)
-			if !ok {
-				response.WriteJSON(w, model.ErrorResponse{Message: model.ErrorInvalidToken.Error()}, http.StatusUnauthorized)
-				return
-			}
-
-			ctx := context.WithValue(r.Context(), UserClaimsKey, claims)
-			
-			next.ServeHTTP(w, r.WithContext(ctx))
-		})
+// GenerateAccessToken signs an HS256 access token for userID that expires after ttl.
+func GenerateAccessToken(secret []byte, userID string, ttl time.Duration, now time.Time) (string, error) {
+	if len(secret) < 32 {
+		return "", errors.New("jwt secret must be at least 32 bytes")
 	}
-}
-
-
-func GenerateToken(secretKey string, claims jwt.MapClaims) (string, error) {
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, err := token.SignedString([]byte(secretKey))
+	claims := Claims{RegisteredClaims: jwt.RegisteredClaims{
+		Subject:   userID,
+		Issuer:    Issuer,
+		IssuedAt:  jwt.NewNumericDate(now),
+		ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
+	}}
+	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(secret)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("sign access token: %w", err)
 	}
-	return tokenString, nil
+	return signed, nil
+}
+
+// ParseAccessToken verifies signature, algorithm, issuer and expiry, and returns the claims.
+func ParseAccessToken(secret []byte, token string) (*Claims, error) {
+	claims := &Claims{}
+	_, err := jwt.ParseWithClaims(token, claims,
+		func(*jwt.Token) (any, error) { return secret, nil },
+		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
+		jwt.WithExpirationRequired(),
+		jwt.WithIssuer(Issuer),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidToken, err)
+	}
+	if claims.Subject == "" {
+		return nil, fmt.Errorf("%w: missing sub", ErrInvalidToken)
+	}
+	return claims, nil
 }

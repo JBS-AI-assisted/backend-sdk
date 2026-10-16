@@ -6,6 +6,6 @@ import (
 
 func NewRedisClient(addr string) *redis.Client {
 	return redis.NewClient(&redis.Options{
-		Addr:     addr,
+		Addr: addr,
 	})
 }
